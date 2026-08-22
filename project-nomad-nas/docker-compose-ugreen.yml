@@ -1,0 +1,132 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: nomad-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nomad-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:0.15.2
+    container_name: nomad-ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_NUM_PARALLEL: 4
+      OLLAMA_MAX_LOADED_MODELS: 1
+
+  qdrant:
+    image: qdrant/qdrant:v1.16
+    container_name: nomad-qdrant
+    restart: always
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+
+  kiwix:
+    image: ghcr.io/kiwix/kiwix-serve:3.8.2
+    container_name: nomad-kiwix
+    restart: always
+    ports:
+      - "8090:8080"
+    volumes:
+      - kiwix-data:/data
+    command: /data
+
+  project-nomad:
+    image: ghcr.io/crosstalk-solutions/project-nomad:latest
+    container_name: nomad-app
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_USER: ${MYSQL_USER}
+      DATABASE_PASSWORD: ${MYSQL_PASSWORD}
+      DATABASE_NAME: ${MYSQL_DATABASE}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OLLAMA_HOST: http://ollama:11434
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      APP_URL: ${APP_URL}
+      NODE_ENV: production
+    depends_on:
+      - mysql
+      - redis
+      - ollama
+      - qdrant
+      - kiwix
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dozzle:
+    image: amir20/dozzle:v10.0
+    container_name: nomad-dozzle
+    restart: always
+    ports:
+      - "9999:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      DOZZLE_LEVEL: info
+
+  disk-collector:
+    image: ghcr.io/crosstalk-solutions/project-nomad-disk-collector:latest
+    container_name: nomad-disk-collector
+    restart: always
+    volumes:
+      - /volume1:/volume1:ro
+      - /volume2:/volume2:ro
+    environment:
+      SCAN_INTERVAL: 3600
+      TARGET_PATHS: "/volume1,/volume2"
+
+volumes:
+  mysql-data:
+    driver: local
+  redis-data:
+    driver: local
+  ollama-models:
+    driver: local
+  qdrant-data:
+    driver: local
+  kiwix-data:
+    driver: local
