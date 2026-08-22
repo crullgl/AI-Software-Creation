@@ -1,0 +1,24 @@
+# ---------------------------------------------------------------------
+# SECRETS - never commit
+# ---------------------------------------------------------------------
+# .env holds this instance's generated database passwords AND the NAS
+# login used to mount the share. Publishing it would hand out both.
+.env
+*.env
+!.env.example
+
+# ---------------------------------------------------------------------
+# DATA - huge, machine-specific, or private
+# ---------------------------------------------------------------------
+mysql/
+redis/
+qdrant/
+ollama/
+storage/
+_ff/
+ffmpeg/
+wheels/
+
+# Logs and scratch
+*.log
+logs/

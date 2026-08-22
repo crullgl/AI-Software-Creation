@@ -1,0 +1,24 @@
+# Copy to %USERPROFILE%\.wslconfig and adjust for your machine, then run
+#     wsl --shutdown
+# and restart Docker Desktop.
+#
+# Docker Desktop runs inside WSL2, so THIS is what caps every container.
+# WSL2 defaults to roughly half your physical RAM - on a 32 GB machine
+# that left Docker with 15.5 GB.
+#
+# The values below suit a 32 GB / 16-core machine. Leave your OS enough:
+# memory should be total minus about 8 GB.
+
+[wsl2]
+memory=24GB
+processors=16
+
+# Somewhere for a model that spills off the GPU to go, rather than being
+# OOM-killed. Slow, but far better than failing.
+swap=8GB
+
+# Hand memory back to Windows after a large model unloads.
+autoMemoryReclaim=gradual
+
+# DO NOT ADD networkingMode=mirrored. It stops the Docker Desktop engine
+# from starting. Learned the hard way.

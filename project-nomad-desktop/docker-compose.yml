@@ -1,0 +1,167 @@
+# Project NOMAD - PC instance (GPU)
+#
+# A SECOND front end for the same library. Deliberately different from the
+# NAS instance in one critical way:
+#
+#   The databases (mysql, redis) and the app's own storage are LOCAL.
+#   They are NEVER shared with the NAS instance. Two MySQL servers opening
+#   one datadir destroys it - InnoDB assumes it owns those files - and the
+#   NAS copy has them open right now. MySQL on an SMB share is unsupported
+#   even alone, because CIFS gives it neither real file locking nor honest
+#   fsync.
+#
+#   Only the CONTENT is shared, and only READ-ONLY: the 1.07 TB of ZIM
+#   archives, mounted straight off the NAS. One library, two front ends,
+#   no duplication.
+#
+# The win here is compute: Ollama runs on this machine's RTX 3060 and 16
+# cores instead of the NAS's CPU.
+
+# The Nomad app creates its own sibling containers through the Docker socket
+# and attaches them to a HARDCODED network name: project-nomad_default.
+# Compose normally derives that from the folder name (nomad-pc), which made
+# the app fail with "network project-nomad_default not found". Pinning the
+# project name here fixes it without renaming the folder.
+name: project-nomad
+
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: nomadpc_mysql
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=nomad
+      - MYSQL_USER=nomad_user
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - ./mysql:/var/lib/mysql          # LOCAL disk. Never the NAS.
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: nomadpc_redis
+    restart: unless-stopped
+    volumes:
+      - ./redis:/data                   # LOCAL disk. Never the NAS.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  admin:
+    image: ghcr.io/crosstalk-solutions/project-nomad:latest
+    container_name: nomadpc_admin
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./storage:/app/storage          # LOCAL app storage
+      # The library itself comes from the NAS, READ-ONLY. Mounted INSIDE
+      # the app's storage so Nomad's own UI lists the archives, not just
+      # the kiwix container.
+      # /app/storage/zim is LOCAL and WRITABLE on purpose. Nomad's installer
+      # downloads a starter archive there, and mounting the NAS read-only
+      # made the install fail with EROFS. The NAS library is served instead
+      # by the separate read-only kiwix below, so nothing ever writes to it.
+      - nomad-maps:/app/storage/maps:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - LOG_LEVEL=info
+      - APP_KEY=${APP_KEY}
+      - HOST=0.0.0.0
+      - URL=http://localhost:8080
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=nomad
+      - DB_USER=nomad_user
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=nomad
+      - DB_SSL=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DISABLE_COMPRESSION=false
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The NAS library, served READ-ONLY, on 8091 so it never collides with the
+  # Information Library that Nomad installs and manages for itself on 8090.
+  # Two libraries by design:
+  #   8090  Nomad's own, LOCAL and writable - it can download new archives
+  #   8091  the NAS, 301 archives, strictly read-only
+  nas_library:
+    image: ghcr.io/kiwix/kiwix-serve:3.8.1
+    container_name: nomadpc_nas_library
+    restart: unless-stopped
+    ports:
+      - "8091:8080"
+    volumes:
+      - nomad-zim:/data:ro              # the NAS library, READ-ONLY
+    entrypoint: ["/bin/sh", "-c", "kiwix-serve --port=8080 --address=all /data/*.zim"]
+
+  # DISABLED 2026-08-22. Nomad's own installer reports "NVIDIA container
+  # runtime detected. Configuring container with GPU support", so its
+  # managed Ollama gets the RTX 3060 too - my earlier assumption that it
+  # would not was wrong. Port 11434 is left free for the app to own it.
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: nomadpc_ollama
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ./ollama:/root/.ollama        # models live on D:
+  #   environment:
+  #     - OLLAMA_KEEP_ALIVE=10m
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+  dozzle:
+    image: amir20/dozzle:v10.0
+    container_name: nomadpc_dozzle
+    restart: unless-stopped
+    ports:
+      - "9998:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOZZLE_ENABLE_ACTIONS=false
+      - DOZZLE_ENABLE_SHELL=false
+
+volumes:
+  # The NAS archive share, mounted by the Docker VM over SMB, read-only.
+  # Credentials come from .env and are never written into this file.
+  nomad-zim:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_HOST}/${NAS_SHARE}/storage/zim"
+      o: "username=${NAS_USER},password=${NAS_PASSWORD},vers=3.0,ro,uid=0,gid=0,file_mode=0444,dir_mode=0555,nobrl"
+
+  # The offline map data, same share, same read-only rules.
+  nomad-maps:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_HOST}/${NAS_SHARE}/storage/maps"
+      o: "username=${NAS_USER},password=${NAS_PASSWORD},vers=3.0,ro,uid=0,gid=0,file_mode=0444,dir_mode=0555,nobrl"
