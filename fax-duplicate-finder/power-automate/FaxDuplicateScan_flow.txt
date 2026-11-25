@@ -1,0 +1,21 @@
+# ==== Fax Duplicate Scan - Power Automate Desktop flow ====
+# HOW TO USE: create a new flow in PAD, open it, click in the Main subflow,
+# then copy everything BELOW the "----- COPY BELOW -----" line and press Ctrl+V.
+# Afterwards, edit the 7 "SET" values at the top to match your share drive and email.
+# If the paste fails or actions show red errors, build it by hand: see BUILD_STEPS.md.
+# ----- COPY BELOW -----
+SET FaxFolder TO $'''\\\\SERVER\\Share\\Faxes'''
+SET ScriptFolder TO $'''C:\\FaxDedupe'''
+SET ReportFolder TO $'''C:\\FaxDedupe\\Reports'''
+SET ReviewFolder TO $'''\\\\SERVER\\Share\\Fax_Duplicates_Review'''
+SET Mode TO $'''Report'''
+SET EmailFrom TO $'''you@yourorg.org'''
+SET EmailTo TO $'''team@yourorg.org'''
+System.RunPowershellScript.RunPowershellScript Script: $'''& \"%ScriptFolder%\\run_fax_dedupe.ps1\" -FaxFolder \"%FaxFolder%\" -ReportFolder \"%ReportFolder%\" -Mode %Mode% -ReviewFolder \"%ReviewFolder%\"''' ScriptOutput=> PowershellOutput ScriptError=> ScriptError
+Outlook.Launch Instance=> OutlookInstance
+IF IsNotEmpty(ScriptError) THEN
+    Outlook.SendEmailThroughOutlook.SendEmail Instance: OutlookInstance Account: EmailFrom SendTo: EmailTo Subject: $'''Fax duplicate scan FAILED''' Body: ScriptError IsBodyHtml: False IsDraft: False
+ELSE
+    Outlook.SendEmailThroughOutlook.SendEmail Instance: OutlookInstance Account: EmailFrom SendTo: EmailTo Subject: $'''Fax duplicate scan results''' Body: PowershellOutput IsBodyHtml: False IsDraft: False Attachments: $'''%ReportFolder%\\fax_duplicates_LATEST.csv'''
+END
+Outlook.Close Instance: OutlookInstance
