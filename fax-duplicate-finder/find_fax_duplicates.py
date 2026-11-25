@@ -126,6 +126,15 @@ def analyze(path: str, size: int, modified: float, exact_only: bool) -> FaxFile:
 # --------------------------------------------------------------------------- #
 # Grouping
 # --------------------------------------------------------------------------- #
+if hasattr(np, "bitwise_count"):          # numpy >= 2.0
+    _popcount = np.bitwise_count
+else:                                      # older numpy: byte lookup table
+    _LUT = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
+
+    def _popcount(x):
+        return _LUT[x.view(np.uint8)].reshape(x.shape[0], -1)
+
+
 class UnionFind:
     def __init__(self, n):
         self.parent = list(range(n))
@@ -170,9 +179,11 @@ def find_groups(files: list[FaxFile], threshold: float, exact_only: bool):
             if len(idxs) < 2:
                 continue
             # vectorised first-page screen, then confirm every page
-            first = np.stack([files[i].page_hashes[0] for i in idxs])
+            # pack each 256-bit page hash into 4 x uint64 for fast XOR + popcount
+            first = np.packbits(np.stack([files[i].page_hashes[0] for i in idxs]), axis=1)
+            first = np.ascontiguousarray(first).view(np.uint64)
             for a in range(len(idxs) - 1):
-                dist = np.count_nonzero(first[a + 1:] != first[a], axis=1)
+                dist = _popcount(first[a + 1:] ^ first[a]).sum(axis=1)
                 for off in np.nonzero(dist <= max_bits)[0]:
                     b = a + 1 + off
                     fa, fb = files[idxs[a]], files[idxs[b]]
